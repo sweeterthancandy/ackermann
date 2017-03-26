@@ -140,6 +140,13 @@ struct operator_ : call{
 };
 
 
+/*                  +                    +    
+                  /   \                /    \
+                +       1   ->      alpha    2
+              /    \
+           alpha    2
+ 
+ */
 namespace transforms{
         struct constant_folding{
                 bool operator()(expr::handle& root)const{
@@ -187,9 +194,20 @@ namespace transforms{
 struct factory{
         using handle = expr::handle;
 
+        #if 0
         template<class... Args>
         auto constant(Args&&... args){
                 return expr::handle{ new ::constant(std::forward<Args>(args)...)};
+        }
+        #endif
+        auto constant(expr::value_type val){
+                auto iter{constant_map_.find(val)};
+                if( iter == constant_map_.end()){
+                        expr::handle ret{ new ::constant(val)};
+                        constant_map_[val] = ret;
+                        return ret;
+                }
+                return iter->second;
         }
         template<class... Args>
         auto operator_(Args&&... args){
@@ -199,6 +217,8 @@ struct factory{
         auto call(Args&&... args){
                 return expr::handle{ new ::call(std::forward<Args>(args)...)};
         }
+private:
+        std::map< int, expr::handle> constant_map_;
 };
 
 /*
@@ -207,10 +227,16 @@ struct factory{
                          \ A(x-1, A(x,y-1))     if x > 0 and y > 0
 */
 struct ackermann_function{
-        bool operator()(expr::handle& root)const{
+private:
+        factory fac;
+        expr::handle _1;
+public:
+        ackermann_function(){
+                _1 = fac.constant(1);
+        }
+        bool operator()(expr::handle& root){
 		bool changed{false};
 
-                factory fac;
 
 		switch( root->get_kind()){
 		case expr::kind_operator:
@@ -235,23 +261,23 @@ struct ackermann_function{
 					auto x{ reinterpret_cast<constant*&>( ptr->get_arg(0)) };
 					if( x->get_value() == 0 ){
 						// n + 1
-						root = fac.operator_("+", ptr->get_arg(1)->clone(), fac.constant(1));
+						root = fac.operator_("+", ptr->get_arg(1), _1);
 						return true;
 					} else if( ptr->get_arg(1)->get_kind() == expr::kind_constant ){
 						auto y{ reinterpret_cast<constant*&>( ptr->get_arg(1)) };
 						if( y->get_value() == 0 ){
 							// A(x-1, 1)
 							root = fac.call("A", 
-									fac.operator_("-", x->clone(), fac.constant(1)),
-									fac.constant(1));
+									fac.operator_("-", ptr->get_arg(0), _1),
+									_1);
 							return true;
 						} else {
 							// A(x,n) = A(x-1, A(x, n-1))
 							root = fac.call("A", 
-									fac.operator_("-", x->clone(), fac.constant(1)),
+									fac.operator_("-", ptr->get_arg(0), _1),
 									fac.call("A", 
-										x->clone(),
-										fac.operator_("-", y->clone(), fac.constant(1))));
+										ptr->get_arg(0),
+										fac.operator_("-", ptr->get_arg(1), _1)));
 							return true;
 						}
 					}
@@ -302,14 +328,25 @@ private:
 struct eval_context{
 };
 
+bool eval_once(eval_context& ctx, expr::handle& root){
+        bool changed = false;
+        bool result = false;
+        result =  ackermann_function()(root);
+        changed = changed || result;
+        result = transforms::constant_folding()(root);
+        changed = changed || result;
+        return changed; 
+}
+
+
 void eval(eval_context& ctx, expr::handle& root){
         //std::cout << *root << "\n";
         for(;;){
                 bool changed = false;
                 bool result = false;
-                result = transforms::constant_folding()(root);
-                changed = changed || result;
                 result =  ackermann_function()(root);
+                changed = changed || result;
+                result = transforms::constant_folding()(root);
                 changed = changed || result;
                 //std::cout << *root << "\n";
                 if( ! changed )
@@ -336,15 +373,42 @@ int ackermann(int x, int y){
 
 #include <gtest/gtest.h>
 
+#define _(x,y,r) EXPECT_EQ( r, ackermann(x,y) );
 TEST( algebra_ackermann, low){
 
-        #define _(x,y,r) EXPECT_EQ( r, ackermann(y,x) );
 
         /* m\n        0          1          2         3          4 */
-        /*  0  */ _(0,0,1)  _(1,0,2)   _(2,0,3)    _(3,0,4)    _(4,0,5)
-        /*  1  */ _(0,1,2)  _(1,1,3)   _(2,1,4)    _(3,1,5)    _(4,1,6)
-        /*  2  */ _(0,2,3)  _(1,2,5)    _(2,2,7)    _(3,2,9)    _(4,2,11)
-        /*  3  */ _(0,3,5)  _(1,3,13)   _(2,3,29)   _(3,3,61)   _(4,3,125)
+        /*  0  */ _(0,0,1)  _(0,1,2)   _(0,2,3)    _(0,3,4)    _(0,4,5)
+        /*  1  */ _(1,0,2)  _(1,1,3)   _(1,2,4)    _(1,3,5)    _(1,4,6)
+        /*  2  */ _(2,0,3)  _(2,1,5)   _(2,2,7)    _(2,3,9)    _(2,4,11)
+        /*  3  */ _(3,0,5)  _(3,1,13)  _(3,2,29)   _(3,3,61)   _(3,4,125)  _(3,5,253)   _(3,6,509) _(3,7,1021)
 
-        #undef _
+}
+
+TEST( algebra_ackermann, 4_x){
+        _(4,0, 13)
+        _(4,1, 65'533)
+}
+
+
+
+
+#undef _
+
+
+int __main(){
+        factory fac;
+        auto root{ fac.call("A", fac.constant(3), fac.constant(4)) };
+
+        eval_context ctx;
+
+        std::cout << *root << "\n";
+        for(;;){
+                auto changed{ eval_once(ctx, root) };
+                if( ! changed )
+                        break;
+                std::cout << *root << "\n";
+        }
+
+
 }
