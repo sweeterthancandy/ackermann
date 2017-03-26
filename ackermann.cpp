@@ -396,9 +396,9 @@ TEST( algebra_ackermann, 4_x){
 #undef _
 
 
-int __main(){
+int main(){
         factory fac;
-        auto root{ fac.call("A", fac.constant(3), fac.constant(4)) };
+        auto root{ fac.call("A", fac.constant(2), fac.constant(3)) };
 
         eval_context ctx;
 
