@@ -139,24 +139,6 @@ struct operator_ : call{
 };
 
 
-#if 0
-template<class F>
-bool apply_top_down(F f, expr*& root){
-	bool changed{false};
-	if( call* ptr = dynamic_cast<call*>(root) ){
-		f(ptr);
-		for( auto iter{ptr->arg_begin()}, end{ptr->arg_end()}; iter!=end;++iter){
-			changed = changed || f(*iter);
-		}
-	} else if ( symbol* ptr = dynamic_cast<symbol*>(root)){
-		f( reinterpret_cast<symbol*&>(root) );
-	} else{
-		// unknown
-	}
-	return changed;
-}
-#endif
-
 namespace transforms{
         struct constant_folding{
                 bool operator()(expr*& root)const{
@@ -264,31 +246,6 @@ struct ackermann_function{
         }
 };
 
-#if 0
-struct symbol_substitute_detail{
-	bool operator()(symbol*& sym){
-		std::cout << "sym\n";
-		auto mapped{m_.find(sym->get_name())};
-		if( mapped != m_.end()){
-			expr* aux{ reinterpret_cast<expr*&>(sym) };
-			aux = mapped->second->clone();
-		}
-		return false;
-	}
-	template<class F>
-	bool operator()(F* ptr){
-		std::cout << "default " << ptr << "\n";
-		return false;
-	}
-	void push(std::string const& sym, expr* e){
-		m_[sym] = e;
-	}
-private:
-	std::map<std::string, expr*> m_;
-};
-#endif
-
-#if 1
 struct symbol_substitute{
 	bool operator()(expr*& root)const{
 		bool changed{false};
@@ -321,61 +278,51 @@ struct symbol_substitute{
 private:
 	std::map<std::string, expr*> m_;
 };
-#endif
-#if 0
-struct symbol_substitute{
-	bool operator()(expr*& root)const{
-		return apply_top_down( symbol_substitute_detail(), root);
-	}
-	void push(std::string const& sym, expr* e){
-		m_[sym] = e;
-	}
-private:
-	std::map<std::string, expr*> m_;
-};
-#endif
 
-
-struct driver{
-        void run(){
-		call::args_vector args; 
-		args.push_back( new symbol("m"));
-		args.push_back( new symbol("n"));
-		root_ = new call("A", args);
-		std::cout << *root_ << "\n";
-		symbol_substitute ss;
-		ss.push("m", new constant(3));
-		ss.push("n", new constant(4));
-		ss(root_);
-                for(;;){
-                        std::cout << *root_ << "\n";
-                        bool changed = false;
-			bool result = false;
-                        result = transforms::constant_folding()(root_);
-			if( result )
-				std::cout << *root_ << "\n";
-			changed = changed || result;
-                        result =  ackermann_function()(root_);
-			if( result ) 
-				std::cout << *root_ << "\n";
-			changed = changed || result;
-                        if( ! changed )
-                                break;
-                }
-                std::cout << *root_ << "\n";
-        }
-private:
-        expr* root_;
+struct eval_context{
 };
 
+void eval(eval_context& ctx, expr*& root){
+        //std::cout << *root << "\n";
+        for(;;){
+                bool changed = false;
+                bool result = false;
+                result = transforms::constant_folding()(root);
+                changed = changed || result;
+                result =  ackermann_function()(root);
+                changed = changed || result;
+                //std::cout << *root << "\n";
+                if( ! changed )
+                        break;
+        }
+}
 
-int main(){
-        try{
-                driver dvr;
-                dvr.run();
+int ackermann(int x, int y){
+        call::args_vector args; 
+        args.push_back( new constant(x));
+        args.push_back( new constant(y));
+        expr* root = new call("A", args);
+
+        eval_context ctx;
+        eval(ctx, root);
+
+        if( root->get_kind() == expr::kind_constant ){
+                return reinterpret_cast<constant*>(root)->get_value();
         }
-        catch(std::exception& e){
-                std::cerr << e.what() << "\n";
-                return EXIT_FAILURE;
-        }
+        std::cout << *root << "\n";
+        throw std::domain_error("doesn't eval to int");
+}
+
+#include <gtest/gtest.h>
+
+TEST( algebra_ackermann, low){
+
+        #define _(x,y,r) EXPECT_EQ( r, ackermann(y,x) );
+
+        /* m\n        0          1          2         3          4 */
+        /*  0  */ _(0,0,1)  _(1,0,2)   _(2,0,3)    _(3,0,4)    _(4,0,5)
+        /*  1  */ _(0,1,2)  _(1,1,3)   _(2,1,4)    _(3,1,5)    _(4,1,6)
+       
+        /*  2  */ _(0,2,3)  _(1,2,5)    _(2,2,7)    _(3,2,9)    _(4,2,11)
+        /*  3  */ _(0,3,5)  _(1,3,13)   _(2,3,29)   _(3,3,61)   _(4,3,125)
 }
