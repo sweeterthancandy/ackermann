@@ -13,6 +13,7 @@
 
 struct expr{
         using value_type = int;
+        using handle = std::shared_ptr<expr>;
 
 	enum kind{
 		kind_constant,
@@ -24,7 +25,7 @@ struct expr{
 
         virtual ~expr()=default;
         virtual std::ostream& dump(std::ostream&)const=0;
-	virtual expr* clone()const=0;
+	virtual handle clone()const=0;
 	virtual kind get_kind()const=0; 
 
         friend std::ostream& operator<<(std::ostream& ostr, expr const& e){
@@ -40,8 +41,8 @@ struct constant : expr{
         virtual std::ostream& dump(std::ostream& ostr)const override{
                 return ostr << val_;
         }
-	expr* clone()const override{
-		return new constant{val_};
+	handle clone()const override{
+		return handle{new constant{val_}};
 	}
 	kind get_kind()const override{
 		return kind_constant;
@@ -56,8 +57,8 @@ struct symbol : expr{
         virtual std::ostream& dump(std::ostream& ostr)const override{
                 return ostr << sym_;
         }
-	expr* clone()const override{
-		return new symbol{sym_};
+	handle clone()const override{
+		return handle{new symbol{sym_}};
 	}
 	kind get_kind()const override{
 		return kind_symbol;
@@ -67,7 +68,7 @@ private:
 };
 
 struct call : expr{
-        using args_vector = std::vector<expr*>;
+        using args_vector = std::vector<handle>;
 
 	explicit call(std::string const& name, args_vector const& args):name_(name),args_(args){}
 
@@ -102,8 +103,8 @@ struct call : expr{
 		ostr << ")";
 		return ostr;
 	}
-	expr* clone()const override{
-		return new call{name_, args_};
+	handle clone()const override{
+		return handle{new call{name_, args_}};
 	}
 	kind get_kind()const override{
 		return kind_call;
@@ -114,8 +115,8 @@ private:
 };
 struct operator_ : call{
 	explicit  operator_(std::string const& op, args_vector const& args): call{op, args}{}
-	explicit  operator_(std::string const& op, expr* arg0): call{op, args_vector{arg0}}{}
-	explicit  operator_(std::string const& op, expr* arg0, expr* arg1): call{op, args_vector{arg0, arg1}}{}
+	explicit  operator_(std::string const& op, handle arg0): call{op, args_vector{arg0}}{}
+	explicit  operator_(std::string const& op, handle arg0, handle arg1): call{op, args_vector{arg0, arg1}}{}
 
 	virtual std::ostream& dump(std::ostream& ostr)const override{
 		if( get_arity() == 2 ){
@@ -130,8 +131,8 @@ struct operator_ : call{
 		}
 		return ostr;
 	}
-	expr* clone()const override{
-		return new operator_{get_name(), get_args()};
+	handle clone()const override{
+		return handle{new operator_{get_name(), get_args()}};
 	}
 	kind get_kind()const override{
 		return kind_operator;
@@ -141,7 +142,7 @@ struct operator_ : call{
 
 namespace transforms{
         struct constant_folding{
-                bool operator()(expr*& root)const{
+                bool operator()(expr::handle& root)const{
 			bool changed{false};
 			switch( root->get_kind()){
 			case expr::kind_operator:
@@ -163,14 +164,14 @@ namespace transforms{
 					if( ptr->get_arg(0)->get_kind() == expr::kind_constant &&
 					    ptr->get_arg(1)->get_kind() == expr::kind_constant )
 					{
-						expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0))->get_value()};
-						expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1))->get_value()};
+						expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
+						expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
 						
 						if( ptr->get_name() == "+" ){
-							root = new constant(arg0 + arg1);
+							root = expr::handle{new constant(arg0 + arg1)};
 							changed = true;
 						} else if( ptr->get_name() == "-" ){
-							root = new constant(arg0 - arg1);
+							root = expr::handle{new constant(arg0 - arg1)};
 							changed = true;
 						}
 					}
@@ -183,14 +184,33 @@ namespace transforms{
         };
 }
 
+struct factory{
+        using handle = expr::handle;
+
+        template<class... Args>
+        auto constant(Args&&... args){
+                return expr::handle{ new ::constant(std::forward<Args>(args)...)};
+        }
+        template<class... Args>
+        auto operator_(Args&&... args){
+                return expr::handle{ new ::operator_(std::forward<Args>(args)...)};
+        }
+        template<class... Args>
+        auto call(Args&&... args){
+                return expr::handle{ new ::call(std::forward<Args>(args)...)};
+        }
+};
+
 /*
 		         / y +1                 if x = 0
 		A(x,y) = | A(x-1, 1)            if x > 0 and y = 0
                          \ A(x-1, A(x,y-1))     if x > 0 and y > 0
 */
 struct ackermann_function{
-        bool operator()(expr*& root)const{
+        bool operator()(expr::handle& root)const{
 		bool changed{false};
+
+                factory fac;
 
 		switch( root->get_kind()){
 		case expr::kind_operator:
@@ -215,23 +235,23 @@ struct ackermann_function{
 					auto x{ reinterpret_cast<constant*&>( ptr->get_arg(0)) };
 					if( x->get_value() == 0 ){
 						// n + 1
-						root = new operator_("+", ptr->get_arg(1)->clone(), new constant(1));
+						root = fac.operator_("+", ptr->get_arg(1)->clone(), fac.constant(1));
 						return true;
 					} else if( ptr->get_arg(1)->get_kind() == expr::kind_constant ){
 						auto y{ reinterpret_cast<constant*&>( ptr->get_arg(1)) };
 						if( y->get_value() == 0 ){
 							// A(x-1, 1)
-							root = new call("A", 
-									new operator_("-", x->clone(), new constant(1)),
-									new constant(1));
+							root = fac.call("A", 
+									fac.operator_("-", x->clone(), fac.constant(1)),
+									fac.constant(1));
 							return true;
 						} else {
 							// A(x,n) = A(x-1, A(x, n-1))
-							root = new call("A", 
-									new operator_("-", x->clone(), new constant(1)),
-									new call("A", 
+							root = fac.call("A", 
+									fac.operator_("-", x->clone(), fac.constant(1)),
+									fac.call("A", 
 										x->clone(),
-										new operator_("-", y->clone(), new constant(1))));
+										fac.operator_("-", y->clone(), fac.constant(1))));
 							return true;
 						}
 					}
@@ -247,7 +267,7 @@ struct ackermann_function{
 };
 
 struct symbol_substitute{
-	bool operator()(expr*& root)const{
+	bool operator()(expr::handle& root)const{
 		bool changed{false};
 		switch( root->get_kind()){
 		case expr::kind_call: {
@@ -272,17 +292,17 @@ struct symbol_substitute{
 		}
 		return changed;
 	}
-	void push(std::string const& sym, expr* e){
+	void push(std::string const& sym, expr::handle e){
 		m_[sym] = e;
 	}
 private:
-	std::map<std::string, expr*> m_;
+	std::map<std::string, expr::handle> m_;
 };
 
 struct eval_context{
 };
 
-void eval(eval_context& ctx, expr*& root){
+void eval(eval_context& ctx, expr::handle& root){
         //std::cout << *root << "\n";
         for(;;){
                 bool changed = false;
@@ -299,15 +319,16 @@ void eval(eval_context& ctx, expr*& root){
 
 int ackermann(int x, int y){
         call::args_vector args; 
-        args.push_back( new constant(x));
-        args.push_back( new constant(y));
-        expr* root = new call("A", args);
+        factory fac;
+        args.push_back( fac.constant(x));
+        args.push_back( fac.constant(y));
+        auto root{ fac.call("A", args)};
 
         eval_context ctx;
         eval(ctx, root);
 
         if( root->get_kind() == expr::kind_constant ){
-                return reinterpret_cast<constant*>(root)->get_value();
+                return reinterpret_cast<constant*>(root.get())->get_value();
         }
         std::cout << *root << "\n";
         throw std::domain_error("doesn't eval to int");
