@@ -202,9 +202,9 @@ namespace transforms{
 }
 
 /*
-		         / n +1                 if m = 0
-		A(m,n) = | A(m-1, 1)            if m > 0 and n = 0
-                         \ A(m-1, A(m,n-1))     if m > 0 and n > 0
+		         / y +1                 if x = 0
+		A(x,y) = | A(x-1, 1)            if x > 0 and y = 0
+                         \ A(x-1, A(x,y-1))     if x > 0 and y > 0
 */
 struct ackermann_function{
         bool operator()(expr*& root)const{
@@ -230,26 +230,26 @@ struct ackermann_function{
 			if( ptr->get_name() == "A" && ptr->get_arity() == 2){
 				// can only expand if it's constant
 				if( ptr->get_arg(0)->get_kind() == expr::kind_constant ){
-					auto m{ reinterpret_cast<constant*&>( ptr->get_arg(0)) };
-					if( m->get_value() == 0 ){
+					auto x{ reinterpret_cast<constant*&>( ptr->get_arg(0)) };
+					if( x->get_value() == 0 ){
 						// n + 1
 						root = new operator_("+", ptr->get_arg(1)->clone(), new constant(1));
 						return true;
 					} else if( ptr->get_arg(1)->get_kind() == expr::kind_constant ){
-						auto arg1{ reinterpret_cast<constant*&>( ptr->get_arg(1)) };
-						if( arg1->get_value() == 0 ){
-							// A(m-1, 1)
+						auto y{ reinterpret_cast<constant*&>( ptr->get_arg(1)) };
+						if( y->get_value() == 0 ){
+							// A(x-1, 1)
 							root = new call("A", 
-									new operator_("-", m->clone(), new constant(1)),
+									new operator_("-", x->clone(), new constant(1)),
 									new constant(1));
 							return true;
 						} else {
-							// A(m,n) = A(m-1, A(m, n-1))
+							// A(x,n) = A(x-1, A(x, n-1))
 							root = new call("A", 
-									new operator_("-", m->clone(), new constant(1)),
+									new operator_("-", x->clone(), new constant(1)),
 									new call("A", 
-										m->clone(),
-										new operator_("-", arg1->clone(), new constant(1))));
+										x->clone(),
+										new operator_("-", y->clone(), new constant(1))));
 							return true;
 						}
 					}
@@ -344,8 +344,8 @@ struct driver{
 		root_ = new call("A", args);
 		std::cout << *root_ << "\n";
 		symbol_substitute ss;
-		ss.push("m", new constant(1));
-		ss.push("n", new constant(2));
+		ss.push("m", new constant(3));
+		ss.push("n", new constant(4));
 		ss(root_);
                 for(;;){
                         std::cout << *root_ << "\n";
