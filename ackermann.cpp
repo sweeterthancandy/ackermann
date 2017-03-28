@@ -79,10 +79,10 @@ struct call : expr{
         
 	decltype(auto) get_name()const{ return name_; }
 
-	auto arg_begin()const{ return args_.begin(); }
-	auto arg_end()const{ return args_.end(); }
-	auto arg_begin(){ return args_.begin(); }
-	auto arg_end(){ return args_.end(); }
+	decltype(auto) arg_begin()const{ return args_.begin(); }
+	decltype(auto) arg_end()const{ return args_.end(); }
+	decltype(auto) arg_begin(){ return args_.begin(); }
+	decltype(auto) arg_end(){ return args_.end(); }
 
 	auto get_arity()const { return args_.size(); }
 
@@ -140,6 +140,7 @@ struct operator_ : call{
 };
 
 
+
 /*                  +                    +    
                   /   \                /    \
                 +       1   ->      alpha    2
@@ -148,6 +149,88 @@ struct operator_ : call{
  
  */
 namespace transforms{
+        struct plus_folding{
+                bool operator()(expr::handle& root)const{
+			bool changed{false};
+                        std::vector<expr::handle*> stack{&root};
+
+
+                        std::cout << "root = " << *root << "\n";
+
+                        for(; stack.size(); ){
+                                expr::handle& ptr{*stack.back()};
+                                stack.pop_back();
+
+                                PRINT_SEQ((stack.size()));
+
+                                switch( ptr->get_kind()){
+                                case expr::kind_operator: {
+                                        auto op{ reinterpret_cast<operator_*>(ptr.get())};
+                                        // found a root
+                                        if( op->get_arity() == 2 && op->get_name() == "+"){
+                                                // need to find the non-leaf chidlren
+                                                std::vector<expr::handle*> sub_stack{&ptr};
+                                                std::vector<expr::handle*> args;
+
+                                                std::cout << "  found " << *ptr << std::endl;
+
+                                                for(;sub_stack.size();){
+                                                        auto& sub{*sub_stack.back()};
+                                                        sub_stack.pop_back();
+                                                        auto as_op{ reinterpret_cast<operator_*>(sub.get())};
+
+
+                                                        if( sub->get_kind() == expr::kind_operator && 
+                                                                as_op->get_arity() == 2 && as_op->get_name() == "+")
+                                                        {
+                                                                std::cout << "    found sub " << *sub << "\n";
+                                                                for( auto iter{as_op->arg_begin()}, end{as_op->arg_end()}; iter!=end;++iter){
+                                                                        sub_stack.emplace_back( &*iter );
+                                                                }
+                                                        } else{
+                                                                std::cout << "    found arg " << *sub << "\n";
+                                                                // leaf
+                                                                args.emplace_back(&sub);
+                                                        }
+                                                }
+                                                std::cout << "args = ";
+                                                for( auto const& arg : args){
+                                                        std::cout << **arg << ",";
+                                                }
+                                                std::cout << "\n";
+                                                
+                                                for( auto const& arg : args){
+                                                        stack.push_back( arg);
+                                                }
+
+                                                boost::sort( args, [](auto l, auto r){
+                                                        return (*l)->get_kind() < (*r)->get_kind();
+                                                });
+
+                                                std::vector<expr::handle*> output_stack;
+
+                                                for( auto iter{args.begin()}, end{args.end()}; iter!=end;++iter){
+                                                }
+
+
+                                                break;
+                                        }
+                                }
+                                case expr::kind_call: {
+                                        auto c{ reinterpret_cast<call*>(ptr.get()) };
+                                        for( auto iter{c->arg_begin()}, end{c->arg_end()}; iter!=end;++iter){
+                                                stack.emplace_back( &*iter );
+                                        }
+                                        break;
+                                }
+                                default:
+                                        break;
+                                }
+                        }
+                        return changed;
+                }
+        };
+        #if 1
         struct constant_folding{
                 bool operator()(expr::handle& root)const{
 			bool changed{false};
@@ -189,6 +272,7 @@ namespace transforms{
 			return changed;
                 }
         };
+        #endif
 }
 
 struct factory{
@@ -326,29 +410,30 @@ private:
 };
 
 struct eval_context{
+        using erased_transform_t = std::function<bool(expr::handle&)>;
+        eval_context&  push(erased_transform_t t){
+                transforms_.push_back(std::move(t));
+                return *this;
+        }
+        auto begin(){ return transforms_.begin(); }
+        auto end(){ return transforms_.end(); }
+private:
+        std::vector<erased_transform_t> transforms_;
 };
 
 bool eval_once(eval_context& ctx, expr::handle& root){
         bool changed = false;
-        bool result = false;
-        result =  ackermann_function()(root);
-        changed = changed || result;
-        result = transforms::constant_folding()(root);
-        changed = changed || result;
+        for( auto& t : ctx ){
+                bool result{t(root)};
+                changed = changed || result;
+        }
         return changed; 
 }
 
 
 void eval(eval_context& ctx, expr::handle& root){
-        //std::cout << *root << "\n";
         for(;;){
-                bool changed = false;
-                bool result = false;
-                result =  ackermann_function()(root);
-                changed = changed || result;
-                result = transforms::constant_folding()(root);
-                changed = changed || result;
-                //std::cout << *root << "\n";
+                bool changed{eval_once(ctx, root)};
                 if( ! changed )
                         break;
         }
@@ -401,6 +486,11 @@ int main(){
         auto root{ fac.call("A", fac.constant(2), fac.constant(3)) };
 
         eval_context ctx;
+        ctx
+                .push(transforms::constant_folding())
+                .push(transforms::plus_folding())
+                .push(ackermann_function())
+        ;
 
         std::cout << *root << "\n";
         for(;;){
