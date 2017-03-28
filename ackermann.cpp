@@ -5,11 +5,22 @@
 #include <stdexcept>
 #include <numeric>
 #include <memory>
+
+#define BOOST_NO_EXCEPTIONS
+
 #include <boost/range/algorithm.hpp>
 #include <boost/preprocessor.hpp>
+#include <boost/function.hpp>
 
 #define PRINT_SEQ_detail(r, d, i, e) do{ std::cout << ( i ? ", " : "" ) << BOOST_PP_STRINGIZE(e) << " = " << (e); }while(0);
 #define PRINT_SEQ(SEQ) do{ BOOST_PP_SEQ_FOR_EACH_I( PRINT_SEQ_detail, ~, SEQ) std::cout << "\n"; }while(0)
+
+namespace boost{
+        void throw_exception( std::exception const & e ){
+                std::cerr << e.what();
+                std::exit(1);
+        }
+}
 
 struct expr{
         using value_type = int;
@@ -37,7 +48,8 @@ struct expr{
 
 struct constant : expr{
         explicit constant(value_type val):val_(val){}
-        auto get_value()const{ return val_; }
+        value_type const& get_value()const{ return val_; }
+        value_type& get_value(){ return val_; }
         virtual std::ostream& dump(std::ostream& ostr)const override{
                 return ostr << val_;
         }
@@ -140,6 +152,36 @@ struct operator_ : call{
 };
 
 
+struct factory{
+        using handle = expr::handle;
+
+        #if 0
+        template<class... Args>
+        auto constant(Args&&... args){
+                return expr::handle{ new ::constant(std::forward<Args>(args)...)};
+        }
+        #endif
+        auto constant(expr::value_type val){
+                auto iter{constant_map_.find(val)};
+                if( iter == constant_map_.end()){
+                        expr::handle ret{ new ::constant(val)};
+                        constant_map_[val] = ret;
+                        return ret;
+                }
+                return iter->second;
+        }
+        template<class... Args>
+        auto operator_(Args&&... args){
+                return expr::handle{ new ::operator_(std::forward<Args>(args)...)};
+        }
+        template<class... Args>
+        auto call(Args&&... args){
+                return expr::handle{ new ::call(std::forward<Args>(args)...)};
+        }
+private:
+        std::map< int, expr::handle> constant_map_;
+};
+
 
 /*                  +                    +    
                   /   \                /    \
@@ -155,13 +197,13 @@ namespace transforms{
                         std::vector<expr::handle*> stack{&root};
 
 
-                        std::cout << "root = " << *root << "\n";
+                        //std::cout << "root = " << *root << "\n";
 
                         for(; stack.size(); ){
                                 expr::handle& ptr{*stack.back()};
                                 stack.pop_back();
 
-                                PRINT_SEQ((stack.size()));
+                                //PRINT_SEQ((stack.size()));
 
                                 switch( ptr->get_kind()){
                                 case expr::kind_operator: {
@@ -172,7 +214,7 @@ namespace transforms{
                                                 std::vector<expr::handle*> sub_stack{&ptr};
                                                 std::vector<expr::handle*> args;
 
-                                                std::cout << "  found " << *ptr << std::endl;
+                                                //std::cout << "  found " << *ptr << std::endl;
 
                                                 for(;sub_stack.size();){
                                                         auto& sub{*sub_stack.back()};
@@ -183,35 +225,51 @@ namespace transforms{
                                                         if( sub->get_kind() == expr::kind_operator && 
                                                                 as_op->get_arity() == 2 && as_op->get_name() == "+")
                                                         {
-                                                                std::cout << "    found sub " << *sub << "\n";
+                                                                //std::cout << "    found sub " << *sub << "\n";
                                                                 for( auto iter{as_op->arg_begin()}, end{as_op->arg_end()}; iter!=end;++iter){
                                                                         sub_stack.emplace_back( &*iter );
                                                                 }
                                                         } else{
-                                                                std::cout << "    found arg " << *sub << "\n";
+                                                                //std::cout << "    found arg " << *sub << "\n";
                                                                 // leaf
                                                                 args.emplace_back(&sub);
                                                         }
                                                 }
+                                                #if 0
                                                 std::cout << "args = ";
                                                 for( auto const& arg : args){
                                                         std::cout << **arg << ",";
                                                 }
                                                 std::cout << "\n";
+                                                #endif
                                                 
+                                                #if 0
                                                 for( auto const& arg : args){
                                                         stack.push_back( arg);
                                                 }
+                                                #endif
 
                                                 boost::sort( args, [](auto l, auto r){
                                                         return (*l)->get_kind() < (*r)->get_kind();
                                                 });
 
-                                                std::vector<expr::handle*> output_stack;
+                                                factory fac;
+                                                expr::value_type c{0};
+                                                expr::handle ch{ fac.constant(-1) };
+                                                expr::handle new_root{ch};
 
-                                                for( auto iter{args.begin()}, end{args.end()}; iter!=end;++iter){
+                                                for( auto iter{args.rbegin()}, end{args.rend()}; iter!=end;++iter){
+                                                        if((**iter)->get_kind() == expr::kind_constant){
+                                                           c += reinterpret_cast<constant*>((*iter)->get())->get_value();
+                                                           continue;
+                                                        }
+
+                                                        new_root = fac.operator_("+", new_root, **iter );
                                                 }
+                                                reinterpret_cast<constant*>(ch.get())->get_value() = c;
 
+                                                //std::cout << "new_root = " << *new_root << "\n";
+                                                ptr = new_root;
 
                                                 break;
                                         }
@@ -275,35 +333,6 @@ namespace transforms{
         #endif
 }
 
-struct factory{
-        using handle = expr::handle;
-
-        #if 0
-        template<class... Args>
-        auto constant(Args&&... args){
-                return expr::handle{ new ::constant(std::forward<Args>(args)...)};
-        }
-        #endif
-        auto constant(expr::value_type val){
-                auto iter{constant_map_.find(val)};
-                if( iter == constant_map_.end()){
-                        expr::handle ret{ new ::constant(val)};
-                        constant_map_[val] = ret;
-                        return ret;
-                }
-                return iter->second;
-        }
-        template<class... Args>
-        auto operator_(Args&&... args){
-                return expr::handle{ new ::operator_(std::forward<Args>(args)...)};
-        }
-        template<class... Args>
-        auto call(Args&&... args){
-                return expr::handle{ new ::call(std::forward<Args>(args)...)};
-        }
-private:
-        std::map< int, expr::handle> constant_map_;
-};
 
 /*
 		         / y +1                 if x = 0
@@ -410,7 +439,7 @@ private:
 };
 
 struct eval_context{
-        using erased_transform_t = std::function<bool(expr::handle&)>;
+        using erased_transform_t = boost::function<bool(expr::handle&)>;
         eval_context&  push(erased_transform_t t){
                 transforms_.push_back(std::move(t));
                 return *this;
@@ -453,9 +482,11 @@ int ackermann(int x, int y){
                 return reinterpret_cast<constant*>(root.get())->get_value();
         }
         std::cout << *root << "\n";
-        throw std::domain_error("doesn't eval to int");
+        std::exit(1);
+        //throw std::domain_error("doesn't eval to int");
 }
 
+#if 0
 #include <gtest/gtest.h>
 
 #define _(x,y,r) EXPECT_EQ( r, ackermann(x,y) );
@@ -479,6 +510,7 @@ TEST( algebra_ackermann, 4_x){
 
 
 #undef _
+#endif
 
 
 int main(){
@@ -487,9 +519,11 @@ int main(){
 
         eval_context ctx;
         ctx
-                .push(transforms::constant_folding())
                 .push(transforms::plus_folding())
+                .push(transforms::constant_folding())
                 .push(ackermann_function())
+                .push(transforms::plus_folding())
+                .push(transforms::constant_folding())
         ;
 
         std::cout << *root << "\n";
@@ -502,3 +536,5 @@ int main(){
 
 
 }
+         
+// vim:tw=8 sw=8
