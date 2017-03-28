@@ -255,21 +255,30 @@ namespace transforms{
 
                                                 factory fac;
                                                 expr::value_type c{0};
-                                                expr::handle ch{ fac.constant(-1) };
-                                                expr::handle new_root{ch};
+                                                expr::handle ch;
+                                                std::vector<expr::handle> new_root;
 
                                                 for( auto iter{args.rbegin()}, end{args.rend()}; iter!=end;++iter){
                                                         if((**iter)->get_kind() == expr::kind_constant){
                                                            c += reinterpret_cast<constant*>((*iter)->get())->get_value();
-                                                           continue;
+                                                           if( ! ch ){
+                                                                   ch = fac.constant(c);
+                                                                   new_root.push_back(ch);
+                                                           }
+                                                        } else{
+                                                                new_root.push_back( **iter );
                                                         }
 
-                                                        new_root = fac.operator_("+", new_root, **iter );
+                                                        if( new_root.size() == 2 ){
+                                                                auto op = fac.operator_("+", new_root[0], new_root[1]);
+                                                                new_root.clear();
+                                                                new_root.push_back(op);
+                                                        }
                                                 }
                                                 reinterpret_cast<constant*>(ch.get())->get_value() = c;
 
                                                 //std::cout << "new_root = " << *new_root << "\n";
-                                                ptr = new_root;
+                                                ptr = new_root.back();
 
                                                 break;
                                         }
@@ -515,15 +524,14 @@ TEST( algebra_ackermann, 4_x){
 
 int main(){
         factory fac;
-        auto root{ fac.call("A", fac.constant(2), fac.constant(3)) };
+        auto root{ fac.call("A", fac.constant(3), fac.constant(3)) };
 
         eval_context ctx;
         ctx
-                .push(transforms::plus_folding())
                 .push(transforms::constant_folding())
                 .push(ackermann_function())
-                .push(transforms::plus_folding())
                 .push(transforms::constant_folding())
+                .push(transforms::plus_folding())
         ;
 
         std::cout << *root << "\n";
