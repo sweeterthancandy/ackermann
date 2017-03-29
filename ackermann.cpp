@@ -266,6 +266,13 @@ namespace match_dsl{
                 }
                 auto __to_matcher__()const{ return *this; }
         };
+        
+        struct symbol_matcher{
+                bool match(expr::handle expr)const{
+                       return expr->get_kind() == expr::kind_symbol;
+                }
+                auto __to_matcher__()const{ return *this; }
+        };
 
         
         template<class... Args>
@@ -372,6 +379,7 @@ namespace match_dsl{
 
         auto _ = any_matcher{};
         auto _c = constant_matcher{};
+        auto _s = symbol_matcher{};
         auto _call = call_matcher<>{};
 
 }
@@ -620,29 +628,20 @@ public:
 
 struct symbol_substitute{
 	bool operator()(expr::handle& root)const{
-		bool changed{false};
-		switch( root->get_kind()){
-		case expr::kind_call: {
-			auto ptr{ reinterpret_cast<call*&>(root) };
-			for( auto iter{ptr->arg_begin()}, end{ptr->arg_end()}; iter!=end;++iter){
-				bool result{(*this)(*iter)};
-				changed = changed || result;
-			}
-		}
-			break;
-		case expr::kind_symbol: {
-			auto ptr{ reinterpret_cast<symbol*&>(root) };
-			auto mapped{m_.find(ptr->get_name())};
-			if( mapped != m_.end()){
-				root = mapped->second->clone();
-				changed = true;
-			}
-		}
-			break;
-		default:
-			break;
-		}
-		return changed;
+                return apply_bottom_up( [this](expr::handle& root)->bool{
+                        using match_dsl::match;
+                        using match_dsl::_s;
+
+                        if( match( root, _s ) ){
+                                auto ptr{ reinterpret_cast<symbol*>(root.get()) };
+                                auto mapped{m_.find(ptr->get_name())};
+                                if( mapped != m_.end()){
+                                        root = mapped->second->clone();
+                                        return true;
+                                }
+                        }
+                        return false;
+                }, root);
 	}
 	void push(std::string const& sym, expr::handle e){
 		m_[sym] = e;
