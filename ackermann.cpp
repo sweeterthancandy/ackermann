@@ -11,6 +11,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/preprocessor.hpp>
 #include <boost/function.hpp>
+#include <boost/functional/hash.hpp>
 
 #define PRINT_SEQ_detail(r, d, i, e) do{ std::cout << ( i ? ", " : "" ) << BOOST_PP_STRINGIZE(e) << " = " << (e); }while(0);
 #define PRINT_SEQ(SEQ) do{ BOOST_PP_SEQ_FOR_EACH_I( PRINT_SEQ_detail, ~, SEQ) std::cout << "\n"; }while(0)
@@ -38,6 +39,23 @@ struct expr{
         virtual std::ostream& dump(std::ostream&)const=0;
 	virtual handle clone()const=0;
 	virtual kind get_kind()const=0; 
+        size_t get_type_hash()const{
+                size_t seed;
+                this->type_hash(seed);
+                return seed;
+        }
+        size_t get_value_hash()const{
+                size_t seed;
+                this->value_hash(seed);
+                return seed;
+        }
+        // default impl
+        virtual void type_hash(size_t& seed)const{
+                boost::hash_combine(seed, get_kind());
+        }
+        virtual void value_hash(size_t& seed)const{
+        }
+
 
         friend std::ostream& operator<<(std::ostream& ostr, expr const& e){
                 return e.dump(ostr);
@@ -59,6 +77,9 @@ struct constant : expr{
 	kind get_kind()const override{
 		return kind_constant;
 	}
+        void value_hash(size_t& seed)const override{
+                boost::hash_combine(seed, val_);
+        }
 private:
         value_type val_;
 };
@@ -75,6 +96,9 @@ struct symbol : expr{
 	kind get_kind()const override{
 		return kind_symbol;
 	}
+        void value_hash(size_t& seed)const override{
+                boost::hash_combine(seed, sym_);
+        }
 private:
         std::string sym_;
 };
@@ -121,10 +145,21 @@ struct call : expr{
 	kind get_kind()const override{
 		return kind_call;
 	}
+        void value_hash(size_t& seed)const override{
+                boost::hash_combine(seed, name_);
+                for( auto const& arg : args_ )
+                        arg->value_hash(seed);
+        }
+        void type_hash(size_t& seed)const override{
+                expr::type_hash(seed);
+                for( auto const& arg : args_ )
+                        arg->type_hash(seed);
+        }
 private:
 	std::string name_;
 	args_vector args_;
 };
+
 struct operator_ : call{
 	explicit  operator_(std::string const& op, args_vector const& args): call{op, args}{}
 	explicit  operator_(std::string const& op, handle arg0): call{op, args_vector{arg0}}{}
@@ -149,6 +184,17 @@ struct operator_ : call{
 	kind get_kind()const override{
 		return kind_operator;
 	}
+        //* for an operator, the operator is part of the type
+        void value_hash(size_t& seed)const override{
+                for( auto const& arg : get_args() )
+                        arg->value_hash(seed);
+        }
+        void type_hash(size_t& seed)const override{
+                expr::type_hash(seed);
+                boost::hash_combine(seed, get_name());
+                for( auto const& arg : get_args() )
+                        arg->type_hash(seed);
+        }
 };
 
 
@@ -563,4 +609,4 @@ int main(){
         other_test();
 }
          
-// vim:tw=8 sw=8
+// vim: sw=8
