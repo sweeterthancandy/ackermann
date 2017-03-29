@@ -39,13 +39,30 @@ struct expr{
         virtual std::ostream& dump(std::ostream&)const=0;
 	virtual handle clone()const=0;
 	virtual kind get_kind()const=0; 
+        /*
+        
+           1) want to hash the full expression
+                        1+2 ~ 1+2
+           2) want to hash the expression type
+                        1+2 ~ 4+5
+           2) want to match function call type
+                        f(x) ~ f(2+3)
+           3) want to match 
+
+         */
         size_t get_type_hash()const{
-                size_t seed;
+                size_t seed{0};
                 this->type_hash(seed);
                 return seed;
         }
         size_t get_value_hash()const{
-                size_t seed;
+                size_t seed{0};
+                this->value_hash(seed);
+                return seed;
+        }
+        size_t get_hash()const{
+                size_t seed{0};
+                this->type_hash(seed);
                 this->value_hash(seed);
                 return seed;
         }
@@ -152,8 +169,12 @@ struct call : expr{
         }
         void type_hash(size_t& seed)const override{
                 expr::type_hash(seed);
+                boost::hash_combine(seed, name_ );
+                boost::hash_combine(seed, args_.size() );
+                #if 0
                 for( auto const& arg : args_ )
                         arg->type_hash(seed);
+                #endif
         }
 private:
 	std::string name_;
@@ -184,29 +205,72 @@ struct operator_ : call{
 	kind get_kind()const override{
 		return kind_operator;
 	}
-        //* for an operator, the operator is part of the type
-        void value_hash(size_t& seed)const override{
-                for( auto const& arg : get_args() )
-                        arg->value_hash(seed);
-        }
-        void type_hash(size_t& seed)const override{
-                expr::type_hash(seed);
-                boost::hash_combine(seed, get_name());
-                for( auto const& arg : get_args() )
-                        arg->type_hash(seed);
-        }
 };
+
+
+namespace match_dsl{
+
+        struct any_matcher{
+                bool operator()(expr::handle)const{
+                        return true;
+                }
+                auto __to_matcher__()const{ return *this; }
+        };
+
+        struct kind_matcher{
+                explicit kind_matcher(expr::kind k):k_(k){}
+                bool operator()(expr::handle expr)const{
+                       return expr->get_kind() == k_;
+                }
+                auto __to_matcher__()const{ return kind_matcher(k_); }
+        private:
+                expr::kind k_;
+        };
+
+        struct constant_matcher : kind_matcher{
+                constant_matcher():kind_matcher(expr::kind_constant){}
+        };
+
+        auto _ = any_matcher{};
+        auto _c = constant_matcher{};
+
+        template<class L, class R>
+        struct operator_matcher{
+                explicit operator_matcher(std::string const& name, L const& l, R const& r):
+                        name_(name), l_(l), r_(r)
+                {}
+                bool operator()(expr::handle expr)const{
+                        if( expr->get_kind() != expr::kind_operator )
+                                return false;
+                        auto op{ reinterpret_cast<operator_*>(expr.get())};
+                        if( op->get_name() != name_ || op->get_arity() != 2 )
+                                return false;
+                        return l_( op->get_arg(0) ) && r_( op->get_arg(1) );
+                }
+                auto __to_matcher__()const{ return operator_matcher(name_,l_,r_); }
+        private:
+                std::string name_;
+                L l_;
+                R r_;
+        };
+
+        template<class L, class R>
+        auto operator+(L const& l, R const& r)
+        {
+                return operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "+", l.__to_matcher__(), r.__to_matcher__() ); 
+        }
+
+        template<class M>
+        bool match( expr::handle expr, M const& m){
+                return m(expr);
+        }
+
+}
 
 
 struct factory{
         using handle = expr::handle;
 
-        #if 0
-        template<class... Args>
-        auto constant(Args&&... args){
-                return expr::handle{ new ::constant(std::forward<Args>(args)...)};
-        }
-        #endif
         auto constant(expr::value_type val){
                 auto iter{constant_map_.find(val)};
                 if( iter == constant_map_.end()){
@@ -228,6 +292,9 @@ private:
         std::map< int, expr::handle> constant_map_;
 };
 
+namespace matching{
+}
+
 
 /*                  +                    +    
                   /   \                /    \
@@ -239,6 +306,8 @@ private:
 namespace transforms{
         struct plus_folding{
                 bool operator()(expr::handle& root)const{
+                        using match_dsl::_;
+                        using match_dsl::match;
 			bool changed{false};
                         std::vector<expr::handle*> stack{&root};
 
@@ -255,7 +324,11 @@ namespace transforms{
                                 case expr::kind_operator: {
                                         auto op{ reinterpret_cast<operator_*>(ptr.get())};
                                         // found a root
+                                        #if 0
                                         if( op->get_arity() == 2 && op->get_name() == "+"){
+                                        #else
+                                        if( match( ptr, _ + _ ) ){
+                                        #endif
                                                 // need to find the non-leaf chidlren
                                                 std::vector<expr::handle*> sub_stack{&ptr};
                                                 std::vector<expr::handle*> args;
@@ -367,6 +440,7 @@ namespace transforms{
 					if( ptr->get_arg(0)->get_kind() == expr::kind_constant &&
 					    ptr->get_arg(1)->get_kind() == expr::kind_constant )
 					{
+                                                auto ptr{ reinterpret_cast<operator_*&>(root) };
 						expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
 						expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
 						
@@ -379,7 +453,6 @@ namespace transforms{
 						}
 					}
 				}
-
 			}
 
 			return changed;
