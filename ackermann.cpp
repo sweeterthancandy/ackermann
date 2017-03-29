@@ -91,9 +91,6 @@ struct expr{
         }
 };
 
-
-
-
 struct constant : expr{
         explicit constant(value_type val):val_(val){}
         value_type const& get_value()const{ return val_; }
@@ -200,6 +197,36 @@ private:
 	std::string name_;
 };
 
+namespace detail{
+
+        enum numeric_group{
+                numeric_group_none,
+                numeric_group_addition,
+                numeric_group_multiplication
+        };
+
+        enum commutivity{
+                does_not_commute,
+                does_commute,
+                anti_commute
+        };
+                
+        struct operator_traits_t{
+                numeric_group group;
+                int precedence;
+                commutivity commute;
+        };
+
+        std::map<std::string, operator_traits_t> operator_traits = {
+                { "+", {numeric_group_addition      , 0, does_commute } },
+                { "-", {numeric_group_addition      , 0, anti_commute} } ,
+                { "*", {numeric_group_multiplication, 1, does_commute} } ,
+                { "/", {numeric_group_multiplication, 1, anti_commute} } ,
+                { "%", {numeric_group_none          , 3, does_not_commute} }
+        };
+
+}
+
 struct operator_ : call{
 	explicit  operator_(std::string const& op, args_vector const& args): call{op, args}{}
 	explicit  operator_(std::string const& op, handle arg0): call{op, args_vector{arg0}}{}
@@ -224,6 +251,14 @@ struct operator_ : call{
 	kind get_kind()const override{
 		return kind_operator;
 	}
+
+        auto is_commute()const{
+                return detail::operator_traits[get_name()].commute;
+        }
+        auto get_precedence()const{
+                return detail::operator_traits[get_name()].precedence;
+        }
+        
 };
 
 
