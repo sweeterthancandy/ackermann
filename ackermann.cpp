@@ -81,6 +81,9 @@ struct expr{
         bool is_terminal()const{
                 return kind_begin_terminal < get_kind() && get_kind() <= kind_end_terminal;
         }
+        bool is_non_terminal()const{
+                return ! is_terminal();
+        }
 
 
         friend std::ostream& operator<<(std::ostream& ostr, expr const& e){
@@ -412,13 +415,37 @@ namespace matching{
 
 template<class F>
 bool apply_bottom_up(F f, expr::handle& root){
-        std::vector<expr::handle*> stack{&root};
+        bool result{false};
+        enum class opcode{
+                yeild_or_apply,
+                apply
+        };
+
+        std::vector<std::pair<opcode, expr::handle*>> stack;
+        stack.emplace_back(opcode::yeild_or_apply, &root);
         for(;stack.size();){
-                auto ptr{stack.back()};
+                auto p{stack.back()};
                 stack.pop_back();
 
-
+                switch(p.first){
+                case opcode::yeild_or_apply:
+                        if( (*p.second)->is_non_terminal()){
+                                stack.emplace_back( opcode::apply, p.second );
+                                auto c{ reinterpret_cast<call*>(p.second->get()) };
+                                for( auto iter{c->arg_begin()}, end{c->arg_end()}; iter!=end;++iter){
+                                        stack.emplace_back( opcode::yeild_or_apply, &*iter );
+                                }
+                                break;
+                        }
+                        // fallthought
+                case opcode::apply:{
+                        bool ret{f( *p.second )};
+                        result = result || ret;
+                }
+                        break;
+                }
         }
+        return result;
 }
 
 namespace transforms{
@@ -521,44 +548,30 @@ namespace transforms{
                         return changed;
                 }
         };
-        #if 1
+        
+
+
         struct constant_folding{
                 bool operator()(expr::handle& root)const{
-			bool changed{false};
-			switch( root->get_kind()){
-			case expr::kind_operator:
-			case expr::kind_call: {
-				auto ptr{ reinterpret_cast<call*&>(root) };
-				for( auto iter{ptr->arg_begin()}, end{ptr->arg_end()}; iter!=end;++iter){
-					bool result{(*this)(*iter)};
-					changed = changed || result;
-				}
-			}
-				break;
-			default:
-				break;
-			}
+                        return apply_bottom_up( [](expr::handle& expr)->bool{
+                                using match_dsl::_c;
+                                using match_dsl::match;
+                                if( match( expr, _c + _c || _c - _c ) ){
+                                        auto ptr{ reinterpret_cast<operator_*&>(expr) };
+                                        expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
+                                        expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
 
-                        using match_dsl::_c;
-                        using match_dsl::match;
-                        if( match( root, _c + _c || _c - _c ) ){
-                                auto ptr{ reinterpret_cast<operator_*&>(root) };
-                                expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
-                                expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
-
-                                if( ptr->get_name() == "+" ){
-                                        root = expr::handle{new constant(arg0 + arg1)};
-                                        changed = true;
-                                } else if( ptr->get_name() == "-" ){
-                                        root = expr::handle{new constant(arg0 - arg1)};
-                                        changed = true;
+                                        if( ptr->get_name() == "+" ){
+                                                expr = expr::handle{new constant(arg0 + arg1)};
+                                        } else if( ptr->get_name() == "-" ){
+                                                expr = expr::handle{new constant(arg0 - arg1)};
+                                        }
+                                        return true;
                                 }
-                        }
-
-			return changed;
+                                return false;
+                        }, root);
                 }
         };
-        #endif
 }
 
 
@@ -576,50 +589,22 @@ public:
                 _1 = fac.constant(1);
         }
         bool operator()(expr::handle& root){
-		bool changed{false};
-                        
-                using match_dsl::_;
-                using match_dsl::_c;
-                using match_dsl::_call;
-                using match_dsl::match;
-
-
-		switch( root->get_kind()){
-		case expr::kind_operator:
-		case expr::kind_call: {
-			auto ptr{ reinterpret_cast<call*&>(root) };
-			for( auto iter{ptr->arg_begin()}, end{ptr->arg_end()}; iter!=end;++iter){
-				bool result{(*this)(*iter)};
-				changed = changed || result;
-			}
-		}
-			break;
-		default:
-			break;
-		}
-
-
-/*
-		         / y +1                 if x = 0
-		A(x,y) = | A(x-1, 1)            if x > 0 and y = 0
-                         \ A(x-1, A(x,y-1))     if x > 0 and y > 0
-*/
-                if( match( root, _call("A", _c(0), _) ) ){
+                return apply_bottom_up( [this](expr::handle& root)->bool{
+                        using match_dsl::_;
+                        using match_dsl::_c;
+                        using match_dsl::_call;
+                        using match_dsl::match;
                         auto c{ reinterpret_cast<call*>( root.get()) };
-                        root = fac.operator_("+", c->get_arg(1), _1);
-                        return true;
-                } else if( match( root, _call("A", _c, _c ) ) ){
-                        auto c{ reinterpret_cast<call*>( root.get()) };
-                        auto x{ reinterpret_cast<constant*>( c->get_arg(0).get()) };
-                        auto y{ reinterpret_cast<constant*>( c->get_arg(1).get()) };
-
-                        if( y->get_value() == 0 ){
+                        if( match( root, _call("A", _c(0), _) ) ){
+                                root = fac.operator_("+", c->get_arg(1), _1);
+                                return true;
+                        } else if( match( root, _call("A", _c, _c(0) ) ) ){
                                 // A(x-1, 1)
                                 root = fac.call("A", 
                                                 fac.operator_("-", c->get_arg(0), _1),
                                                 _1);
                                 return true;
-                        } else {
+                        } else if( match( root, _call("A", _c, _c ) ) ){
                                 // A(x,n) = A(x-1, A(x, n-1))
                                 root = fac.call("A", 
                                                 fac.operator_("-", c->get_arg(0), _1),
@@ -628,9 +613,8 @@ public:
                                                          fac.operator_("-", c->get_arg(1), _1)));
                                 return true;
                         }
-                }
-
-		return changed;
+                        return false;
+                }, root);
         }
 };
 
@@ -778,7 +762,6 @@ void github_render(){
                 std::cout << *root << "\n";
         }
 }
-
 int main(){
         other_test();
 }
