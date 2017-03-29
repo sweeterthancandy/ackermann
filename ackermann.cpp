@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <numeric>
 #include <memory>
+#include <type_traits>
 
 #define BOOST_NO_EXCEPTIONS
 
@@ -12,9 +13,12 @@
 #include <boost/preprocessor.hpp>
 #include <boost/function.hpp>
 #include <boost/functional/hash.hpp>
+#include <boost/fusion/include/vector.hpp>
+#include <boost/fusion/include/algorithm.hpp>
 
 #define PRINT_SEQ_detail(r, d, i, e) do{ std::cout << ( i ? ", " : "" ) << BOOST_PP_STRINGIZE(e) << " = " << (e); }while(0);
 #define PRINT_SEQ(SEQ) do{ BOOST_PP_SEQ_FOR_EACH_I( PRINT_SEQ_detail, ~, SEQ) std::cout << "\n"; }while(0)
+#define PRINT_TEST( EXPR ) do{ auto ret{EXPR}; std::cout << #EXPR << ( ret ? "OK" : "FAILED" ) << "\n"; }while(0);
 
 namespace boost{
         void throw_exception( std::exception const & e ){
@@ -211,7 +215,7 @@ struct operator_ : call{
 namespace match_dsl{
 
         struct any_matcher{
-                bool operator()(expr::handle)const{
+                bool match(expr::handle)const{
                         return true;
                 }
                 auto __to_matcher__()const{ return *this; }
@@ -219,36 +223,94 @@ namespace match_dsl{
 
         struct kind_matcher{
                 explicit kind_matcher(expr::kind k):k_(k){}
-                bool operator()(expr::handle expr)const{
+                bool match(expr::handle expr)const{
                        return expr->get_kind() == k_;
                 }
                 auto __to_matcher__()const{ return kind_matcher(k_); }
         private:
                 expr::kind k_;
         };
+        
+        struct constant_val_matcher{
+                explicit constant_val_matcher(expr::value_type val):val_(val){}
+                bool match(expr::handle expr)const{
+                       return expr->get_kind() == expr::kind_constant &&
+                              reinterpret_cast<constant*>(expr.get())->get_value() == val_;
+                }
+                auto __to_matcher__()const{ return constant_val_matcher(val_); }
+        private:
+                expr::value_type val_;
+        };
 
         struct constant_matcher{
-                bool operator()(expr::handle expr)const{
+                bool match(expr::handle expr)const{
                        return expr->get_kind() == expr::kind_constant;
+                }
+                auto operator()(expr::value_type val)const{
+                        return constant_val_matcher(val);
                 }
                 auto __to_matcher__()const{ return *this; }
         };
 
+        
+        template<class... Args>
+        struct call_matcher{
+
+                using args_t = boost::fusion::vector<Args...>;
+
+                call_matcher(){}
+                call_matcher(std::string const& name, Args... args):
+                        name_{name},
+                        args_{args...}
+                {}
+                bool match(expr::handle expr)const{
+                       if( expr->get_kind() != expr::kind_call )
+                               return false;
+                       if( name_.empty() )
+                               return true;
+                       // if we're matching the name we're matching the arguments
+                       auto c{ reinterpret_cast<call*>(expr.get()) };
+                       if( name_.size() && c->get_name() != name_ )
+                               return false;
+                       if( sizeof...(Args) != c->get_arity())
+                               return false;
+                       bool ret{true};
+                       auto idx{0};
+                       boost::fusion::for_each( args_, [&](auto const& m){
+                                auto result{m.match(c->get_arg(idx++))}; 
+                                ret = ret && result;
+                       });
+                       return ret;
+                }
+
+
+                // _call("A",_,_)
+                template<class... Args>
+                auto operator()(std::string const& name, Args&&... args)const{
+                        return call_matcher<std::decay_t<Args>...>(name, std::forward<Args>(args)...);
+                }
+                auto __to_matcher__()const{ return *this; }
+        private:
+                std::string name_;
+                args_t args_;
+        };
+
         auto _ = any_matcher{};
         auto _c = constant_matcher{};
+        auto _call = call_matcher<>{};
 
         template<class L, class R>
         struct operator_matcher{
                 explicit operator_matcher(std::string const& name, L const& l, R const& r):
                         name_(name), l_(l), r_(r)
                 {}
-                bool operator()(expr::handle expr)const{
+                bool match(expr::handle expr)const{
                         if( expr->get_kind() != expr::kind_operator )
                                 return false;
                         auto op{ reinterpret_cast<operator_*>(expr.get())};
                         if( op->get_name() != name_ || op->get_arity() != 2 )
                                 return false;
-                        return l_( op->get_arg(0) ) && r_( op->get_arg(1) );
+                        return l_.match( op->get_arg(0) ) && r_.match( op->get_arg(1) );
                 }
                 auto __to_matcher__()const{ return operator_matcher(name_,l_,r_); }
         private:
@@ -270,7 +332,7 @@ namespace match_dsl{
 
         template<class M>
         bool match( expr::handle expr, M const& m){
-                return m(expr);
+                return m.match(expr);
         }
         
         
@@ -470,6 +532,11 @@ public:
         }
         bool operator()(expr::handle& root){
 		bool changed{false};
+                        
+                using match_dsl::_;
+                using match_dsl::_c;
+                using match_dsl::_call;
+                using match_dsl::match;
 
 
 		switch( root->get_kind()){
@@ -486,42 +553,38 @@ public:
 			break;
 		}
 
-		switch( root->get_kind()){
-		case expr::kind_call: {
-			auto ptr{ reinterpret_cast<call*&>(root) };
-			if( ptr->get_name() == "A" && ptr->get_arity() == 2){
-				// can only expand if it's constant
-				if( ptr->get_arg(0)->get_kind() == expr::kind_constant ){
-					auto x{ reinterpret_cast<constant*&>( ptr->get_arg(0)) };
-					if( x->get_value() == 0 ){
-						// n + 1
-						root = fac.operator_("+", ptr->get_arg(1), _1);
-						return true;
-					} else if( ptr->get_arg(1)->get_kind() == expr::kind_constant ){
-						auto y{ reinterpret_cast<constant*&>( ptr->get_arg(1)) };
-						if( y->get_value() == 0 ){
-							// A(x-1, 1)
-							root = fac.call("A", 
-									fac.operator_("-", ptr->get_arg(0), _1),
-									_1);
-							return true;
-						} else {
-							// A(x,n) = A(x-1, A(x, n-1))
-							root = fac.call("A", 
-									fac.operator_("-", ptr->get_arg(0), _1),
-									fac.call("A", 
-										ptr->get_arg(0),
-										fac.operator_("-", ptr->get_arg(1), _1)));
-							return true;
-						}
-					}
-				}
-			}
-		}
-			break;
-		default:
-			break;
-		}
+
+/*
+		         / y +1                 if x = 0
+		A(x,y) = | A(x-1, 1)            if x > 0 and y = 0
+                         \ A(x-1, A(x,y-1))     if x > 0 and y > 0
+*/
+                if( match( root, _call("A", _c(0), _) ) ){
+                        auto c{ reinterpret_cast<call*>( root.get()) };
+                        root = fac.operator_("+", c->get_arg(1), _1);
+                        return true;
+                } else if( match( root, _call("A", _c, _c ) ) ){
+                        auto c{ reinterpret_cast<call*>( root.get()) };
+                        auto x{ reinterpret_cast<constant*>( c->get_arg(0).get()) };
+                        auto y{ reinterpret_cast<constant*>( c->get_arg(1).get()) };
+
+                        if( y->get_value() == 0 ){
+                                // A(x-1, 1)
+                                root = fac.call("A", 
+                                                fac.operator_("-", c->get_arg(0), _1),
+                                                _1);
+                                return true;
+                        } else {
+                                // A(x,n) = A(x-1, A(x, n-1))
+                                root = fac.call("A", 
+                                                fac.operator_("-", c->get_arg(0), _1),
+                                                fac.call("A", 
+                                                         c->get_arg(0),
+                                                         fac.operator_("-", c->get_arg(1), _1)));
+                                return true;
+                        }
+                }
+
 		return changed;
         }
 };
@@ -641,7 +704,7 @@ TEST( algebra_ackermann, 4_x){
 
 #include <cassert>
 void other_test(){
-        #define _(x,y,r) do{ auto ret{ackermann(x,y)}; std::cout << "A(" << x << ", " << y << ") " << ( r == ret ? "OK" : "FAILED" ) << "\n"; }while(0);
+        #define _(x,y,r) do{ auto ret{ackermann(x,y)}; std::cout << "A(" << x << ", " << y << ") = " << ret << "    "  << ( r == ret ? "OK" : "FAILED" ) << "\n"; }while(0);
         /* m\n        0          1          2         3          4 */
         /*  0  */ _(0,0,1)  _(0,1,2)   _(0,2,3)    _(0,3,4)    _(0,4,5)
         /*  1  */ _(1,0,2)  _(1,1,3)   _(1,2,4)    _(1,3,5)    _(1,4,6)
