@@ -32,8 +32,10 @@ struct expr{
         using handle = std::shared_ptr<expr>;
 
 	enum kind{
-		kind_constant,
-		kind_symbol,
+                kind_begin_terminal,
+                        kind_constant,
+                        kind_symbol,
+                kind_end_terminal,
 		kind_call,
 		kind_operator,
 		sizeof_kind
@@ -75,6 +77,9 @@ struct expr{
                 boost::hash_combine(seed, get_kind());
         }
         virtual void value_hash(size_t& seed)const{
+        }
+        bool is_terminal()const{
+                return kind_begin_terminal < get_kind() && get_kind() <= kind_end_terminal;
         }
 
 
@@ -226,7 +231,7 @@ namespace match_dsl{
                 bool match(expr::handle expr)const{
                        return expr->get_kind() == k_;
                 }
-                auto __to_matcher__()const{ return kind_matcher(k_); }
+                auto __to_matcher__()const{ return *this; }
         private:
                 expr::kind k_;
         };
@@ -237,7 +242,7 @@ namespace match_dsl{
                        return expr->get_kind() == expr::kind_constant &&
                               reinterpret_cast<constant*>(expr.get())->get_value() == val_;
                 }
-                auto __to_matcher__()const{ return constant_val_matcher(val_); }
+                auto __to_matcher__()const{ return *this; }
         private:
                 expr::value_type val_;
         };
@@ -295,9 +300,6 @@ namespace match_dsl{
                 args_t args_;
         };
 
-        auto _ = any_matcher{};
-        auto _c = constant_matcher{};
-        auto _call = call_matcher<>{};
 
         template<class L, class R>
         struct operator_matcher{
@@ -312,31 +314,55 @@ namespace match_dsl{
                                 return false;
                         return l_.match( op->get_arg(0) ) && r_.match( op->get_arg(1) );
                 }
-                auto __to_matcher__()const{ return operator_matcher(name_,l_,r_); }
+                auto __to_matcher__()const{ return *this; }
         private:
                 std::string name_;
+                L l_;
+                R r_;
+        };
+        
+        template<class L, class R>
+        struct or_matcher{
+                explicit or_matcher(L const& l, R const& r):
+                        l_(l), r_(r)
+                {}
+                bool match(expr::handle expr)const{
+                        return l_.match(expr) || r_.match(expr);
+                }
+                auto __to_matcher__()const{ return *this; }
+        private:
                 L l_;
                 R r_;
         };
 
         template<class L, class R>
         auto operator+(L const& l, R const& r)
+                ->decltype( operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "+", l.__to_matcher__(), r.__to_matcher__() ) )
         {
                 return operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "+", l.__to_matcher__(), r.__to_matcher__() ); 
         }
         template<class L, class R>
         auto operator-(L const& l, R const& r)
+                ->decltype( operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "-", l.__to_matcher__(), r.__to_matcher__() ) )
         {
                 return operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "-", l.__to_matcher__(), r.__to_matcher__() ); 
+        }
+        template<class L, class R>
+        auto operator||(L const& l, R const& r)
+                ->decltype( or_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>{l,r} )
+        {
+                return or_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>{l,r};
         }
 
         template<class M>
         bool match( expr::handle expr, M const& m){
                 return m.match(expr);
         }
-        
-        
 
+
+        auto _ = any_matcher{};
+        auto _c = constant_matcher{};
+        auto _call = call_matcher<>{};
 
 }
 
@@ -376,6 +402,18 @@ namespace matching{
            alpha    2
  
  */
+
+template<class F>
+bool apply_bottom_up(F f, expr::handle& root){
+        std::vector<expr::handle*> stack{&root};
+        for(;stack.size();){
+                auto ptr{stack.back()};
+                stack.pop_back();
+
+
+        }
+}
+
 namespace transforms{
         struct plus_folding{
                 bool operator()(expr::handle& root)const{
@@ -496,7 +534,7 @@ namespace transforms{
 
                         using match_dsl::_c;
                         using match_dsl::match;
-                        if( match( root, _c + _c ) || match( root, _c - _c ) ){
+                        if( match( root, _c + _c || _c - _c ) ){
                                 auto ptr{ reinterpret_cast<operator_*&>(root) };
                                 expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
                                 expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
