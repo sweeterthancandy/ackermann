@@ -90,6 +90,7 @@ struct expr{
 
 
 
+
 struct constant : expr{
         explicit constant(value_type val):val_(val){}
         value_type const& get_value()const{ return val_; }
@@ -129,35 +130,42 @@ private:
         std::string sym_;
 };
 
-struct call : expr{
+struct non_terminal_expr : expr{
         using args_vector = std::vector<handle>;
 
-	explicit call(std::string const& name, args_vector const& args):name_(name),args_(args){}
+        template<class... Args>
+        explicit non_terminal_expr(Args&&... args) : args_{std::forward<Args>(args)...}{}
+	
+        decltype(auto) arg_begin()const{ return args_.begin(); }
+	decltype(auto) arg_end()const{ return args_.end(); }
+	decltype(auto) arg_begin(){ return args_.begin(); }
+	decltype(auto) arg_end(){ return args_.end(); }
+	decltype(auto) get_arg(size_t idx)const{ return args_[idx]; }
+	decltype(auto) get_arg(size_t idx)     { return args_[idx]; }
+	decltype(auto) get_args()const{ return args_; }
+	decltype(auto) get_args()     { return args_; }
+private:
+	args_vector args_;
+};
+
+struct call : non_terminal_expr{
+
+	explicit call(std::string const& name, args_vector const& args): non_terminal_expr{args}, name_{name}{}
 
 	template<class... Args>
-	explicit call(std::string const& name, Args const&... args):name_(name),args_{args...}{}
-
+	explicit call(std::string const& name, Args const&... args):non_terminal_expr{args...},name_{name}{}
 
         
 	decltype(auto) get_name()const{ return name_; }
 
-	decltype(auto) arg_begin()const{ return args_.begin(); }
-	decltype(auto) arg_end()const{ return args_.end(); }
-	decltype(auto) arg_begin(){ return args_.begin(); }
-	decltype(auto) arg_end(){ return args_.end(); }
 
-	auto get_arity()const { return args_.size(); }
+	auto get_arity()const { return get_args().size(); }
 
-	decltype(auto) get_arg(size_t idx)const{ return args_[idx]; }
-	decltype(auto) get_arg(size_t idx)     { return args_[idx]; }
-	
-	decltype(auto) get_args()const{ return args_; }
-	decltype(auto) get_args()     { return args_; }
         
 	virtual std::ostream& dump(std::ostream& ostr)const override{
 		ostr << name_ << "(";
 		bool comma{false};
-		for( auto& arg : args_){
+		for( auto& arg : get_args()){
 			ostr << ( comma ? "," : "" );
 			arg->dump(ostr);
 			comma = true;
@@ -166,28 +174,27 @@ struct call : expr{
 		return ostr;
 	}
 	handle clone()const override{
-		return handle{new call{name_, args_}};
+		return handle{new call{name_, get_args()}};
 	}
 	kind get_kind()const override{
 		return kind_call;
 	}
         void value_hash(size_t& seed)const override{
                 boost::hash_combine(seed, name_);
-                for( auto const& arg : args_ )
+                for( auto const& arg : get_args() )
                         arg->value_hash(seed);
         }
         void type_hash(size_t& seed)const override{
                 expr::type_hash(seed);
                 boost::hash_combine(seed, name_ );
-                boost::hash_combine(seed, args_.size() );
+                boost::hash_combine(seed, get_args().size() );
                 #if 0
-                for( auto const& arg : args_ )
+                for( auto const& arg : get_args() )
                         arg->type_hash(seed);
                 #endif
         }
 private:
 	std::string name_;
-	args_vector args_;
 };
 
 struct operator_ : call{
