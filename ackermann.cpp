@@ -227,8 +227,11 @@ namespace match_dsl{
                 expr::kind k_;
         };
 
-        struct constant_matcher : kind_matcher{
-                constant_matcher():kind_matcher(expr::kind_constant){}
+        struct constant_matcher{
+                bool operator()(expr::handle expr)const{
+                       return expr->get_kind() == expr::kind_constant;
+                }
+                auto __to_matcher__()const{ return *this; }
         };
 
         auto _ = any_matcher{};
@@ -259,11 +262,19 @@ namespace match_dsl{
         {
                 return operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "+", l.__to_matcher__(), r.__to_matcher__() ); 
         }
+        template<class L, class R>
+        auto operator-(L const& l, R const& r)
+        {
+                return operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>( "-", l.__to_matcher__(), r.__to_matcher__() ); 
+        }
 
         template<class M>
         bool match( expr::handle expr, M const& m){
                 return m(expr);
         }
+        
+        
+
 
 }
 
@@ -307,6 +318,7 @@ namespace transforms{
         struct plus_folding{
                 bool operator()(expr::handle& root)const{
                         using match_dsl::_;
+                        using match_dsl::_c;
                         using match_dsl::match;
 			bool changed{false};
                         std::vector<expr::handle*> stack{&root};
@@ -320,97 +332,83 @@ namespace transforms{
 
                                 //PRINT_SEQ((stack.size()));
 
-                                switch( ptr->get_kind()){
-                                case expr::kind_operator: {
-                                        auto op{ reinterpret_cast<operator_*>(ptr.get())};
-                                        // found a root
-                                        #if 0
-                                        if( op->get_arity() == 2 && op->get_name() == "+"){
-                                        #else
-                                        if( match( ptr, _ + _ ) ){
-                                        #endif
-                                                // need to find the non-leaf chidlren
-                                                std::vector<expr::handle*> sub_stack{&ptr};
-                                                std::vector<expr::handle*> args;
+                                if( match( ptr, _ + _ ) ){
+                                        // need to find the non-leaf chidlren
+                                        std::vector<expr::handle*> sub_stack{&ptr};
+                                        std::vector<expr::handle*> args;
 
-                                                //std::cout << "  found " << *ptr << std::endl;
+                                        //std::cout << "  found " << *ptr << std::endl;
 
-                                                for(;sub_stack.size();){
-                                                        auto& sub{*sub_stack.back()};
-                                                        sub_stack.pop_back();
-                                                        auto as_op{ reinterpret_cast<operator_*>(sub.get())};
+                                        for(;sub_stack.size();){
+                                                auto& sub{*sub_stack.back()};
+                                                sub_stack.pop_back();
+                                                auto as_op{ reinterpret_cast<operator_*>(sub.get())};
 
 
-                                                        if( sub->get_kind() == expr::kind_operator && 
-                                                                as_op->get_arity() == 2 && as_op->get_name() == "+")
-                                                        {
-                                                                //std::cout << "    found sub " << *sub << "\n";
-                                                                for( auto iter{as_op->arg_begin()}, end{as_op->arg_end()}; iter!=end;++iter){
-                                                                        sub_stack.emplace_back( &*iter );
-                                                                }
-                                                        } else{
-                                                                //std::cout << "    found arg " << *sub << "\n";
-                                                                // leaf
-                                                                args.emplace_back(&sub);
+                                                if( match( sub, _ + _ ) )
+                                                {
+                                                        //std::cout << "    found sub " << *sub << "\n";
+                                                        for( auto iter{as_op->arg_begin()}, end{as_op->arg_end()}; iter!=end;++iter){
+                                                                sub_stack.emplace_back( &*iter );
                                                         }
+                                                } else{
+                                                        //std::cout << "    found arg " << *sub << "\n";
+                                                        // leaf
+                                                        args.emplace_back(&sub);
                                                 }
-                                                #if 0
-                                                std::cout << "args = ";
-                                                for( auto const& arg : args){
-                                                        std::cout << **arg << ",";
-                                                }
-                                                std::cout << "\n";
-                                                #endif
-                                                
-                                                #if 0
-                                                for( auto const& arg : args){
-                                                        stack.push_back( arg);
-                                                }
-                                                #endif
-
-                                                boost::sort( args, [](auto l, auto r){
-                                                        return (*l)->get_kind() < (*r)->get_kind();
-                                                });
-
-                                                factory fac;
-                                                expr::value_type c{0};
-                                                expr::handle ch;
-                                                std::vector<expr::handle> new_root;
-
-                                                for( auto iter{args.rbegin()}, end{args.rend()}; iter!=end;++iter){
-                                                        if((**iter)->get_kind() == expr::kind_constant){
-                                                           c += reinterpret_cast<constant*>((*iter)->get())->get_value();
-                                                           if( ! ch ){
-                                                                   ch = fac.constant(c);
-                                                                   new_root.push_back(ch);
-                                                           }
-                                                        } else{
-                                                                new_root.push_back( **iter );
-                                                        }
-
-                                                        if( new_root.size() == 2 ){
-                                                                auto op = fac.operator_("+", new_root[0], new_root[1]);
-                                                                new_root.clear();
-                                                                new_root.push_back(op);
-                                                        }
-                                                }
-                                                reinterpret_cast<constant*>(ch.get())->get_value() = c;
-
-                                                //std::cout << "new_root = " << *new_root << "\n";
-                                                ptr = new_root.back();
-
-                                                break;
                                         }
+                                        #if 0
+                                        std::cout << "args = ";
+                                        for( auto const& arg : args){
+                                                std::cout << **arg << ",";
+                                        }
+                                        std::cout << "\n";
+                                        #endif
+                                        
+                                        #if 0
+                                        for( auto const& arg : args){
+                                                stack.push_back( arg);
+                                        }
+                                        #endif
+
+                                        boost::sort( args, [](auto l, auto r){
+                                                return (*l)->get_kind() < (*r)->get_kind();
+                                        });
+
+                                        factory fac;
+                                        expr::value_type c{0};
+                                        expr::handle ch;
+                                        std::vector<expr::handle> new_root;
+
+                                        for( auto iter{args.rbegin()}, end{args.rend()}; iter!=end;++iter){
+
+                                                if( match( **iter, _c )){
+                                                   c += reinterpret_cast<constant*>((*iter)->get())->get_value();
+                                                   if( ! ch ){
+                                                           ch = fac.constant(c);
+                                                           new_root.push_back(ch);
+                                                   }
+                                                } else{
+                                                        new_root.push_back( **iter );
+                                                }
+
+                                                if( new_root.size() == 2 ){
+                                                        auto op = fac.operator_("+", new_root[0], new_root[1]);
+                                                        new_root.clear();
+                                                        new_root.push_back(op);
+                                                }
+                                        }
+                                        reinterpret_cast<constant*>(ch.get())->get_value() = c;
+
+                                        //std::cout << "new_root = " << *new_root << "\n";
+                                        ptr = new_root.back();
+
                                 }
-                                case expr::kind_call: {
+                                else if( ptr->get_kind() == expr::kind_call){
                                         auto c{ reinterpret_cast<call*>(ptr.get()) };
                                         for( auto iter{c->arg_begin()}, end{c->arg_end()}; iter!=end;++iter){
                                                 stack.emplace_back( &*iter );
                                         }
-                                        break;
-                                }
-                                default:
-                                        break;
                                 }
                         }
                         return changed;
@@ -434,26 +432,21 @@ namespace transforms{
 				break;
 			}
 
-			if( root->get_kind() == expr::kind_operator ){
-				auto ptr{ reinterpret_cast<operator_*&>(root) };
-				if( ptr->get_arity() == 2 ){
-					if( ptr->get_arg(0)->get_kind() == expr::kind_constant &&
-					    ptr->get_arg(1)->get_kind() == expr::kind_constant )
-					{
-                                                auto ptr{ reinterpret_cast<operator_*&>(root) };
-						expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
-						expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
-						
-						if( ptr->get_name() == "+" ){
-							root = expr::handle{new constant(arg0 + arg1)};
-							changed = true;
-						} else if( ptr->get_name() == "-" ){
-							root = expr::handle{new constant(arg0 - arg1)};
-							changed = true;
-						}
-					}
-				}
-			}
+                        using match_dsl::_c;
+                        using match_dsl::match;
+                        if( match( root, _c + _c ) || match( root, _c - _c ) ){
+                                auto ptr{ reinterpret_cast<operator_*&>(root) };
+                                expr::value_type arg0{ reinterpret_cast<constant*>(ptr->get_arg(0).get())->get_value()};
+                                expr::value_type arg1{ reinterpret_cast<constant*>(ptr->get_arg(1).get())->get_value()};
+
+                                if( ptr->get_name() == "+" ){
+                                        root = expr::handle{new constant(arg0 + arg1)};
+                                        changed = true;
+                                } else if( ptr->get_name() == "-" ){
+                                        root = expr::handle{new constant(arg0 - arg1)};
+                                        changed = true;
+                                }
+                        }
 
 			return changed;
                 }
