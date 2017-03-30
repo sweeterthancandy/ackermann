@@ -6,6 +6,7 @@
 #include <numeric>
 #include <memory>
 #include <type_traits>
+#include <iomanip>
 
 #define BOOST_NO_EXCEPTIONS
 
@@ -18,7 +19,7 @@
 
 #define PRINT_SEQ_detail(r, d, i, e) do{ std::cout << ( i ? ", " : "" ) << BOOST_PP_STRINGIZE(e) << " = " << (e); }while(0);
 #define PRINT_SEQ(SEQ) do{ BOOST_PP_SEQ_FOR_EACH_I( PRINT_SEQ_detail, ~, SEQ) std::cout << "\n"; }while(0)
-#define PRINT_TEST( EXPR ) do{ auto ret{EXPR}; std::cout << #EXPR << ( ret ? "OK" : "FAILED" ) << "\n"; }while(0);
+#define PRINT_TEST( EXPR ) do{ auto ret{EXPR}; std::cout << std::setw(50) << std::left << #EXPR << std::setw(0) << ( ret ? " OK" : " FAILED" ) << "\n"; }while(0);
 
 namespace boost{
         void throw_exception( std::exception const & e ){
@@ -251,14 +252,6 @@ struct operator_ : call{
 	kind get_kind()const override{
 		return kind_operator;
 	}
-
-        auto is_commute()const{
-                return detail::operator_traits[get_name()].commute;
-        }
-        auto get_precedence()const{
-                return detail::operator_traits[get_name()].precedence;
-        }
-        
 };
 
 
@@ -423,7 +416,7 @@ namespace match_dsl{
 struct factory{
         using handle = expr::handle;
 
-        auto constant(expr::value_type val){
+        handle constant(expr::value_type val){
                 auto iter{constant_map_.find(val)};
                 if( iter == constant_map_.end()){
                         expr::handle ret{ new ::constant(val)};
@@ -433,11 +426,11 @@ struct factory{
                 return iter->second;
         }
         template<class... Args>
-        auto operator_(Args&&... args){
+        handle operator_(Args&&... args)const{
                 return expr::handle{ new ::operator_(std::forward<Args>(args)...)};
         }
         template<class... Args>
-        auto call(Args&&... args){
+        handle call(Args&&... args)const{
                 return expr::handle{ new ::call(std::forward<Args>(args)...)};
         }
 private:
@@ -764,6 +757,64 @@ TEST( algebra_ackermann, 4_x){
 #undef _
 #endif
 
+namespace frontend{
+
+        struct frontend_wrapper{
+                explicit frontend_wrapper(expr::handle ptr):ptr_(ptr){}
+                operator expr::handle(){ return ptr_; }
+                auto to_expr(){ return ptr_; }
+                auto to_expr()const{ return ptr_; }
+                friend std::ostream& operator<<(std::ostream& ostr, frontend_wrapper const& self){
+                        return ostr << *self.ptr_;
+                }
+        private:
+                expr::handle ptr_;
+        };
+
+        auto const_(expr::value_type val){
+                return frontend_wrapper{expr::handle{new constant{val}}};
+        }
+        auto sym(std::string const& name){
+                return frontend_wrapper{expr::handle{new symbol{name}}};
+        }
+
+        namespace detail{
+                template<class T>
+                auto to_expr(T const& t)->decltype(expr::handle{new constant{t}})
+                {
+                        return expr::handle{new constant{t}};
+                }
+                template<class T>
+                auto to_expr(T const& t)->decltype(expr::handle{new symbol{t}})
+                {
+                        return expr::symbol{new constant{t}};
+                }
+                template<class T>
+                auto to_expr(T const& t)->decltype(t.to_expr())
+                {
+                        return t.to_expr();
+                }
+        }
+        
+        template<class... Args>
+        auto call_(std::string const& name, Args&&... args){
+                return frontend_wrapper{expr::handle{new call{name, detail::to_expr(args)...}}};
+        }
+
+        template<class L, class R>
+        auto operator+(L const& l, R const& r)
+                ->decltype( frontend_wrapper{expr::handle{new operator_{"+", detail::to_expr(l), detail::to_expr(r)}}})
+        {
+                return frontend_wrapper{expr::handle{new operator_{"+", detail::to_expr(l), detail::to_expr(r)}}};
+        }
+        template<class L, class R>
+        auto operator-(L const& l, R const& r)
+                ->decltype( frontend_wrapper{expr::handle{new operator_{"-", detail::to_expr(l), detail::to_expr(r)}}})
+        {
+                return frontend_wrapper{expr::handle{new operator_{"-", detail::to_expr(l), detail::to_expr(r)}}};
+        }
+
+}
 
 #include <cassert>
 void other_test(){
@@ -772,13 +823,66 @@ void other_test(){
         /*  0  */ _(0,0,1)  _(0,1,2)   _(0,2,3)    _(0,3,4)    _(0,4,5)
         /*  1  */ _(1,0,2)  _(1,1,3)   _(1,2,4)    _(1,3,5)    _(1,4,6)
         /*  2  */ _(2,0,3)  _(2,1,5)   _(2,2,7)    _(2,3,9)    _(2,4,11)
-        /*  3  */ _(3,0,5)  _(3,1,13)  _(3,2,29)   _(3,3,61)   _(3,4,125)  _(3,5,253)   _(3,6,509) _(3,7,1021)
+        /*  3  */ _(3,0,5)  _(3,1,13)  _(3,2,29)   _(3,3,61)   _(3,4,125)  // _(3,5,253)   _(3,6,509) _(3,7,1021)
         #undef _
+}
+
+void plus_folding_test(){
+        using match_dsl::match;
+        using match_dsl::_;
+        using match_dsl::_c;
+        using match_dsl::_s;
+
+        using frontend::const_;
+        using frontend::sym;
+        using frontend::call_;
+
+
+        factory fac;
+        transforms::plus_folding pf;
+
+
+        expr::handle expr;
+
+        auto t = [&](expr::handle h){
+                pf(h);
+                return h;
+        };
+                
+        auto _1 = const_(1);
+        auto a = sym("a");
+        auto b = sym("b");
+        auto c = sym("c");
+
+        PRINT_SEQ((_1));
+        PRINT_SEQ((_1+2));
+        PRINT_SEQ((*t(_1)));
+        PRINT_SEQ((*t(_1+2)));
+
+        PRINT_TEST( match(  _1 , _c ) );
+        PRINT_TEST( match( t(_1), _c ) );
+        PRINT_TEST( match( t(_1), _c(1) ) );
+        
+        PRINT_TEST( match(  _1 + 2  , _c + _c ));
+        PRINT_TEST( match(  _1 + 2  , _c(1) + _c(2) ));
+        
+        PRINT_TEST( match(t(_1 + 2)  , _c ) ) ;
+        PRINT_TEST( match(t(_1 + 2)  , _c(3) ) );
+        
+        PRINT_TEST( match(t(a + b + 1)  , _s + _s + _c(1) ) );
+        PRINT_TEST( match(t(a + 1 + 2)  , _s + _c(3) ) );
+        PRINT_TEST( match(t(_1 + 2 + 3)  , _c(6) ) );
+        PRINT_TEST( match(t(_1 + a + 3)  , _c(4) + _s ) );
+
+        PRINT_TEST( match(t(a + b + c)  , _s + _s + _s ) );
+
+
+
 }
 
 void github_render(){
         factory fac;
-        auto root{ fac.call("A", fac.constant(3), fac.constant(3)) };
+        auto root{ fac.call("A", fac.constant(3), fac.constant(2)) };
 
         eval_context ctx;
         ctx
@@ -797,7 +901,9 @@ void github_render(){
         }
 }
 int main(){
-        other_test();
+        //github_render();
+        //other_test();
+        plus_folding_test();
 }
          
 // vim: sw=8
