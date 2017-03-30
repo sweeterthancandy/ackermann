@@ -814,6 +814,16 @@ namespace frontend{
                 return frontend_wrapper{expr::handle{new operator_{"-", detail::to_expr(l), detail::to_expr(r)}}};
         }
 
+        namespace literal{
+                frontend_wrapper operator "" _s(const char* name){
+                        return sym(name);
+                }
+
+                frontend_wrapper operator "" _c(unsigned long long int val){
+                        return const_(val);
+                }
+        }
+
 }
 
 #include <cassert>
@@ -836,6 +846,8 @@ void plus_folding_test(){
         using frontend::const_;
         using frontend::sym;
         using frontend::call_;
+        using namespace frontend::literal;
+
 
 
         factory fac;
@@ -849,30 +861,30 @@ void plus_folding_test(){
                 return h;
         };
                 
-        auto _1 = const_(1);
         auto a = sym("a");
         auto b = sym("b");
         auto c = sym("c");
 
-        PRINT_SEQ((_1));
-        PRINT_SEQ((_1+2));
-        PRINT_SEQ((*t(_1)));
-        PRINT_SEQ((*t(_1+2)));
+        PRINT_SEQ((1_c));
+        PRINT_SEQ((1_c+2));
+        PRINT_SEQ((*t(1_c)));
+        PRINT_SEQ((*t(1_c+2)));
 
-        PRINT_TEST( match(  _1 , _c ) );
-        PRINT_TEST( match( t(_1), _c ) );
-        PRINT_TEST( match( t(_1), _c(1) ) );
+        PRINT_TEST( match(  1_c , _c ) );
+        PRINT_TEST( match( t(1_c), _c ) );
+        PRINT_TEST( match( t(1_c), _c(1) ) );
         
-        PRINT_TEST( match(  _1 + 2  , _c + _c ));
-        PRINT_TEST( match(  _1 + 2  , _c(1) + _c(2) ));
+        PRINT_TEST( match(  1_c + 2  , _c + _c ));
+        PRINT_TEST( match(  1_c + 2  , _c(1) + _c(2) ));
         
-        PRINT_TEST( match(t(_1 + 2)  , _c ) ) ;
-        PRINT_TEST( match(t(_1 + 2)  , _c(3) ) );
+        PRINT_TEST( match(t(1_c + 2)  , _c ) ) ;
+        PRINT_TEST( match(t(1_c + 2)  , _c(3) ) );
         
         PRINT_TEST( match(t(a + b + 1)  , _s + _s + _c(1) ) );
         PRINT_TEST( match(t(a + 1 + 2)  , _s + _c(3) ) );
-        PRINT_TEST( match(t(_1 + 2 + 3)  , _c(6) ) );
-        PRINT_TEST( match(t(_1 + a + 3)  , _c(4) + _s ) );
+        PRINT_TEST( match(t(1_c + 2 + 3)  , _c(6) ) );
+        PRINT_TEST( match(t(1_c + a + 3)  , _c(4) + _s ) );
+        PRINT_SEQ((*t(1_c + a + 3)));
 
         PRINT_TEST( match(t(a + b + c)  , _s + _s + _s ) );
 
