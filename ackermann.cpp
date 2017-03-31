@@ -335,9 +335,9 @@ namespace match_dsl{
 
 
                 // _call("A",_,_)
-                template<class... Args>
-                auto operator()(std::string const& name, Args&&... args)const{
-                        return call_matcher<std::decay_t<Args>...>(name, std::forward<Args>(args)...);
+                template<class... Brgs>
+                auto operator()(std::string const& name, Brgs&&... args)const{
+                        return call_matcher<std::decay_t<Brgs>...>(name, std::forward<Brgs>(args)...);
                 }
                 auto __to_matcher__()const{ return *this; }
         private:
@@ -349,21 +349,28 @@ namespace match_dsl{
         template<class L, class R>
         struct operator_matcher{
                 explicit operator_matcher(std::string const& name, L const& l, R const& r):
-                        name_(name), l_(l), r_(r)
+                         l_(l), r_(r),name_(name)
+                {}
+                explicit operator_matcher(L const& l, R const& r):
+                        l_(l), r_(r)
                 {}
                 bool match(expr::handle expr)const{
                         if( expr->get_kind() != expr::kind_operator )
                                 return false;
                         auto op{ reinterpret_cast<operator_*>(expr.get())};
-                        if( op->get_name() != name_ || op->get_arity() != 2 )
+                        // can have empty name to match any operator
+                        if( name_.size() && op->get_name() != name_)
+                                return false;
+                        if( op->get_arity() != 2 )
                                 return false;
                         return l_.match( op->get_arg(0) ) && r_.match( op->get_arg(1) );
                 }
                 auto __to_matcher__()const{ return *this; }
         private:
-                std::string name_;
                 L l_;
                 R r_;
+                // where name_ = "", any operator_ matcher
+                std::string name_;
         };
         
         template<class L, class R>
@@ -403,6 +410,14 @@ namespace match_dsl{
         bool match( expr::handle expr, M const& m){
                 return m.match(expr);
         }
+
+        template<class L, class R>
+        auto op(L const& l, R const& r)
+                ->decltype( operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>{ l.__to_matcher__(), r.__to_matcher__() })
+        {
+                return operator_matcher<decltype(l.__to_matcher__()), decltype(r.__to_matcher__())>{ l.__to_matcher__(), r.__to_matcher__() };
+        }
+
 
 
         auto _ = any_matcher{};
@@ -490,6 +505,7 @@ namespace transforms{
                         using match_dsl::_;
                         using match_dsl::_c;
                         using match_dsl::match;
+                        using match_dsl::op;
 			bool changed{false};
                         std::vector<expr::handle*> stack{&root};
 
@@ -542,12 +558,13 @@ namespace transforms{
 
                                 //PRINT_SEQ((stack.size()));
 
-                                if( ptr->get_kind() == expr::kind_operator && ptr->get_arity() == 2 ){
-                                        
-                                        assert( detail::operator_traits.count( ptr->get_name() ) == 1 && "precondition failed");
+                                if( match( ptr, op(_,_) ) ){
 
-                                        auto op{ ptr->get_name() };
-                                        auto traits = detail::operator_traits[op];
+                                        auto op_ptr{ reinterpret_cast<operator_*>(ptr.get())};
+                                        
+                                        assert( detail::operator_traits.count( op_ptr->get_name() ) == 1 && "precondition failed");
+
+                                        auto traits = detail::operator_traits[ op_ptr->get_name() ];
 
                                         //std::cout << "  found " << *ptr << std::endl;
 
@@ -559,19 +576,20 @@ namespace transforms{
                                                 sub_stack.pop_back();
 
 
-                                                if( sub->get_kind() == expr::kind_operator && sub->get_arity() == 2 && 
-                                                    detail::operator_traits[sub->get_name()].traits.precedence == traits.precedence )
-                                                {
-                                                        //std::cout << "    found sub " << *sub << "\n";
-                                                        auto as_op{ reinterpret_cast<operator_*>(sub.get())};
-                                                        for( auto iter{as_op->arg_begin()}, end{as_op->arg_end()}; iter!=end;++iter){
-                                                                sub_stack.emplace_back( &*iter );
+                                                if( match(sub, op(_,_) ) ){
+                                                        auto op_sub{ reinterpret_cast<operator_*>(sub.get())};
+                                                        if( detail::operator_traits[op_sub->get_name()].precedence == traits.precedence )
+                                                        {
+                                                                std::cout << "    found sub " << *sub << "\n";
+                                                                for( auto iter{op_sub->arg_begin()}, end{op_sub->arg_end()}; iter!=end;++iter){
+                                                                        sub_stack.emplace_back( &*iter );
+                                                                }
+                                                                continue;
                                                         }
-                                                } else{
-                                                        //std::cout << "    found arg " << *sub << "\n";
-                                                        // leaf
-                                                        args.emplace_back(&sub);
                                                 }
+                                                std::cout << "    found arg " << *sub << "\n";
+                                                // leaf
+                                                args.emplace_back(&sub);
                                         }
                                         #if 0
                                         std::cout << "args = ";
@@ -833,7 +851,7 @@ namespace frontend{
                 template<class T>
                 auto to_expr(T const& t)->decltype(expr::handle{new symbol{t}})
                 {
-                        return expr::symbol{new constant{t}};
+                        return expr::handle{new constant{t}};
                 }
                 template<class T>
                 auto to_expr(T const& t)->decltype(t.to_expr())
@@ -932,7 +950,7 @@ void plus_folding_test(){
         PRINT_TEST( match(t(1_c + a + 3)  , _c(4) + _s ) );
         PRINT_SEQ((*t(1_c + a + 3)));
 
-        PRINT_TEST( match(t(a + b + c)  , _s + _s + _s ) );
+        //PRINT_TEST( match(t(a + b + c)  , _s + _s + _s ) );
 
 
 
