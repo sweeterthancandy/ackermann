@@ -500,24 +500,70 @@ namespace transforms{
                                 expr::handle& ptr{*stack.back()};
                                 stack.pop_back();
 
+                                // 1 + a + 2
+                                //
+                                // [+ + 1 a 2], []
+                                // [+ 1 a, 2], []
+                                // [+ 1 a], [2]
+                                // [1, a], [2]
+                                // [1], [2,a]
+                                // [], [2,a,1]
+                                //
+                                // {0,-1,[]}       [2,a,1]
+                                // f({0,-1,[]},1)  [2,a]
+                                // f({1,0,[]},a)   [2]       
+                                // f({1,0,[a]},2)  []
+                                // {3,0,[a]}
+                                //
+                                // 3 + a
+                                //
+                                // a op b = inv( b op a )
+                                // a op b op c 
+                                // inv( b op a ) op c
+                                // inv( c op inv(b op a ) )
+                                // inv(c) op inv^2(b op a)
+                                // inv(c) op ( b op a )
+                                //
+                                // 1 - 2
+                                // - 1 2
+                                // [-]  []
+                                // [(+,1),(-,2)] []
+                                // [(+,1)]   [(-,2)]
+                                // []   [(+,1),(-,2])
+                                //
+                                // 1 + 2 - 3 - 2
+                                // - - + 1 2 3 2
+                                // [-] []
+                                // [-,+] []
+                                // [-,1,2] []
+                                //
+                                //
+                                //
+
                                 //PRINT_SEQ((stack.size()));
 
-                                if( match( ptr, _ + _ ) ){
-                                        // need to find the non-leaf chidlren
-                                        std::vector<expr::handle*> sub_stack{&ptr};
-                                        std::vector<expr::handle*> args;
+                                if( ptr->get_kind() == expr::kind_operator && ptr->get_arity() == 2 ){
+                                        
+                                        assert( detail::operator_traits.count( ptr->get_name() ) == 1 && "precondition failed");
+
+                                        auto op{ ptr->get_name() };
+                                        auto traits = detail::operator_traits[op];
 
                                         //std::cout << "  found " << *ptr << std::endl;
 
+                                        // need to find the non-leaf chidlren
+                                        std::vector<expr::handle*> sub_stack{&ptr};
+                                        std::vector<expr::handle*> args;
                                         for(;sub_stack.size();){
                                                 auto& sub{*sub_stack.back()};
                                                 sub_stack.pop_back();
-                                                auto as_op{ reinterpret_cast<operator_*>(sub.get())};
 
 
-                                                if( match( sub, _ + _ ) )
+                                                if( sub->get_kind() == expr::kind_operator && sub->get_arity() == 2 && 
+                                                    detail::operator_traits[sub->get_name()].traits.precedence == traits.precedence )
                                                 {
                                                         //std::cout << "    found sub " << *sub << "\n";
+                                                        auto as_op{ reinterpret_cast<operator_*>(sub.get())};
                                                         for( auto iter{as_op->arg_begin()}, end{as_op->arg_end()}; iter!=end;++iter){
                                                                 sub_stack.emplace_back( &*iter );
                                                         }
