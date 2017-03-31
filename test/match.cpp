@@ -2,6 +2,7 @@
 
 #include "calg/calg.h"
         
+using namespace calg;
 using match_dsl::match;
 using match_dsl::_;
 using match_dsl::_c;

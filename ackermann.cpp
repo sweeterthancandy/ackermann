@@ -1,5 +1,6 @@
 #include "calg/calg.h"
 
+#if 0
 #include <cassert>
 void other_test(){
         #define _(x,y,r) do{ auto ret{ackermann(x,y)}; std::cout << "A(" << x << ", " << y << ") = " << ret << "    "  << ( r == ret ? "OK" : "FAILED" ) << "\n"; }while(0);
@@ -91,5 +92,7 @@ int main(){
         //other_test();
         plus_folding_test();
 }
+#endif
+int main(){}
          
 // vim: sw=8
